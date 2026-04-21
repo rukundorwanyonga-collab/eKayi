@@ -1,0 +1,199 @@
+#include <iostream>
+#include <string>
+#include <memory>
+#include <vector>
+#include <array>
+#include <fstream>
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+
+using namespace std;
+
+// 1. DATA STRUCTURE: TRANSACTION (DLL Node)
+struct Transaction {
+    string itariki, izina, ubwoko;
+    int ingano;
+    double igiciro_kurangura, igiciro_kugurisha;
+    double ibyinjiye, ibyasohotse, inyungu;
+
+    unique_ptr<Transaction> next;
+    Transaction* prev = nullptr;
+
+    Transaction(string d, string n, string u, int q, double bp, double sp) 
+        : itariki(d), izina(n), ubwoko(u), ingano(q), igiciro_kurangura(bp), igiciro_kugurisha(sp) {
+        ibyasohotse = bp * q;
+        ibyinjiye = sp * q;
+        inyungu = ibyinjiye - ibyasohotse;
+    }
+};
+
+// 2. SEARCH ENGINE: TRIE WITH EDIT DISTANCE
+struct TrieNode {
+    array<unique_ptr<TrieNode>, 26> children;
+    bool isEndOfWord = false;
+    vector<Transaction*> transactions;
+
+    TrieNode() { for (auto& child : children) child = nullptr; }
+};
+
+class SmartSearch {
+    unique_ptr<TrieNode> root;
+public:
+    SmartSearch() : root(make_unique<TrieNode>()) {}
+
+    void insert(const string& word, Transaction* ptr) {
+        TrieNode* node = root.get();
+        for (char c : word) {
+            int index = tolower(c) - 'a';
+            if (index < 0 || index >= 26) continue;
+            if (!node->children[index]) node->children[index] = make_unique<TrieNode>();
+            node = node->children[index].get();
+        }
+        node->isEndOfWord = true;
+        node->transactions.push_back(ptr);
+    }
+
+    void searchRecursive(TrieNode* node, char letter, const string& word, 
+                         vector<int>& previousRow, string currentWord, int maxCost) {
+        int size = word.size();
+        vector<int> currentRow(size + 1);
+        currentRow[0] = previousRow[0] + 1;
+
+        for (int i = 1; i <= size; ++i) {
+            int insertCost = currentRow[i - 1] + 1;
+            int deleteCost = previousRow[i] + 1;
+            int replaceCost = (tolower(word[i - 1]) == letter) ? previousRow[i - 1] : previousRow[i - 1] + 1;
+            currentRow[i] = min({insertCost, deleteCost, replaceCost});
+        }
+
+        if (currentRow[size] <= maxCost && node->isEndOfWord) {
+            cout << "\n[!] Igitekerezo: " << currentWord << " (Amakosa: " << currentRow[size] << ")\n";
+            for(auto* t : node->transactions) {
+                cout << "   -> " << t->itariki << " | " << t->ubwoko << " | Inyungu: " << t->inyungu << " RWF\n";
+            }
+        }
+
+        if (*min_element(currentRow.begin(), currentRow.end()) <= maxCost) {
+            for (int i = 0; i < 26; ++i) {
+                if (node->children[i]) {
+                    searchRecursive(node->children[i].get(), 'a' + i, word, currentRow, currentWord + (char)('a' + i), maxCost);
+                }
+            }
+        }
+    }
+
+    void suggest(const string& word) {
+        vector<int> firstRow(word.size() + 1);
+        for (int i = 0; i <= (int)word.size(); ++i) firstRow[i] = i;
+        for (int i = 0; i < 26; ++i) {
+            if (root->children[i]) searchRecursive(root->children[i].get(), 'a' + i, word, firstRow, string(1, 'a' + i), 2);
+        }
+    }
+};
+
+// 3. MAIN SYSTEM: EKAYI MANAGER
+class EKayiManager {
+    unique_ptr<Transaction> head;
+    Transaction* tail = nullptr;
+    SmartSearch engine;
+    const string filename = "ekayi_secure.bin";
+    char key = 'K'; 
+
+public:
+    ~EKayiManager() { while(head) head = move(head->next); }
+
+    void andika(string d, string n, string u, int q, double bp, double sp, bool save = true) {
+        auto nshya = make_unique<Transaction>(d, n, u, q, bp, sp);
+        Transaction* p_nshya = nshya.get();
+        engine.insert(n, p_nshya);
+
+        if (!head) { head = move(nshya); tail = p_nshya; }
+        else { p_nshya->prev = tail; tail->next = move(nshya); tail = p_nshya; }
+
+        if (save) {
+            ofstream file(filename, ios::binary | ios::app);
+            string raw = d+"|"+n+"|"+u+"|"+to_string(q)+"|"+to_string(bp)+"|"+to_string(sp)+"\n";
+            for(char &c : raw) c ^= key; 
+            file << raw;
+            file.close();
+        }
+    }
+
+    void load() {
+        ifstream file(filename, ios::binary);
+        if (!file.is_open()) return;
+        string line;
+        while (getline(file, line)) {
+            if (line.empty()) continue;
+            for(char &c : line) c ^= key;
+            stringstream ss(line);
+            string d, n, u, q_str, bp_str, sp_str;
+            getline(ss, d, '|'); getline(ss, n, '|'); getline(ss, u, '|');
+            getline(ss, q_str, '|'); getline(ss, bp_str, '|'); getline(ss, sp_str, '|');
+            if(!d.empty()) andika(d, n, u, stoi(q_str), stod(bp_str), stod(sp_str), false);
+        }
+    }
+
+    void exportToCSV() {
+        ofstream file("ekayi_data.csv");
+        file << "Date,Izina,Ubwoko,Quantity,BP,SP,Inyungu\n";
+        Transaction* temp = head.get();
+        while (temp) {
+            file << temp->itariki << "," << temp->izina << "," << temp->ubwoko << "," 
+                 << temp->ingano << "," << temp->igiciro_kurangura << "," 
+                 << temp->igiciro_kugurisha << "," << temp->inyungu << "\n";
+            temp = temp->next.get();
+        }
+        file.close();
+        cout << "\n[CSV] Amakuru yoherejwe muri 'ekayi_data.csv'!\n";
+    }
+
+    void raporo() {
+        Transaction* temp = head.get();
+        double tin = 0, tout = 0, tpro = 0;
+        cout << "\n" << setfill('=') << setw(95) << "" << "\n";
+        cout << left << setw(12) << "ITARIKI" << setw(15) << "IZINA" << setw(12) << "UBWOKO" 
+             << setw(15) << "ASOHOTSE" << setw(15) << "YINJIYE" << "INYUNGU\n";
+        cout << setfill('-') << setw(95) << "" << "\n" << setfill(' ');
+        while (temp) {
+            cout << left << setw(12) << temp->itariki << setw(15) << temp->izina << setw(12) << temp->ubwoko 
+                 << setw(15) << temp->ibyasohotse << setw(15) << temp->ibyinjiye << temp->inyungu << " RWF\n";
+            tin += temp->ibyinjiye; tout += temp->ibyasohotse; tpro += temp->inyungu;
+            temp = temp->next.get();
+        }
+        cout << setfill('=') << setw(95) << "" << "\n";
+        cout << "[TOTAL] Ibyasohotse: " << tout << " | Ibyinjiye: " << tin << " | Inyungu: " << tpro << " RWF\n";
+    }
+
+    void shaka(string s) { engine.suggest(s); }
+};
+
+int main() {
+    EKayiManager app;
+    app.load();
+
+    int hitamo;
+    do {
+        cout << "\n--- eKayi Business Engine 2026 ---\n";
+        cout << "1. Andika Transaction\n2. Raporo Yuzuye\n3. Shaka (Smart Search)\n4. Export to CSV (Python Ready)\n0. Exit\nHitamo: ";
+        if (!(cin >> hitamo)) break;
+
+        if (hitamo == 1) {
+            string d, n, u; int q; double bp, sp;
+            cout << "Date (YYYY-MM-DD): "; cin >> d;
+            cout << "Izina: "; cin >> n;
+            cout << "Ubwoko: "; cin >> u;
+            cout << "Ingano: "; cin >> q;
+            cout << "BP: "; cin >> bp;
+            cout << "SP: "; cin >> sp;
+            app.andika(d, n, u, q, bp, sp);
+        } else if (hitamo == 2) app.raporo();
+        else if (hitamo == 3) {
+            string s; cout << "Shaka izina: "; cin >> s;
+            app.shaka(s);
+        } else if (hitamo == 4) app.exportToCSV();
+    } while (hitamo != 0);
+
+    return 0;
+}
